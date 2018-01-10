@@ -1,6 +1,6 @@
 ruleset hello_world {
   meta {
-    name "Hello World"
+    name "Hello World
     description <<
 A first ruleset for the Quickstart
 >>
