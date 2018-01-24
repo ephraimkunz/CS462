@@ -19,12 +19,11 @@ ruleset twilio_v2_api {
 
         messages = function(to, from, pageSize) {
             base_url = <<https://#{account_sid}:#{auth_token}@api.twilio.com/2010-04-01/Accounts/#{account_sid}/>>;
-            queryString = {
-                "PageSize":pageSize
-            };
+            queryString = {};
 
-            queryString = to.isnull() => queryString | queryString.put({"To":to});
-            queryString = from.isnull() => queryString | queryString.put({"From":from});
+            queryString = (pageSize.isnull() || pageSize == "") => queryString | queryString.put({"PageSize":pageSize});
+            queryString = (to.isnull() || to == "") => queryString | queryString.put({"To":to});
+            queryString = (from.isnull() || from == "") => queryString | queryString.put({"From":from});
             queryString.klog("Testing: ");
             
             response = http:get(base_url + "Messages.json", qs = queryString);
