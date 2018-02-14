@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Temperature Console</title>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+    <script>
+        function getTemps() {
+            $.getJSON("http://localhost:8080/sky/cloud/7AvAkjEQ5jYhDbS8wcXUyh/temperature_store/temperatures", function (
+                data) {
+                var recents = [];
+                data.reverse();
+                $.each(data, function (key, val) {
+                    if (key === 0) {
+                        $('#current-temp').text(val.temp);
+                    } else {
+                        recents.push("<li>" + val.temp + "</li>");
+                    }
+                });
+
+                $('#recents-list').empty().append(recents);
+            })
+        }
+
+        function getViolations() {
+            $.getJSON("http://localhost:8080/sky/cloud/7AvAkjEQ5jYhDbS8wcXUyh/temperature_store/threshold_violations", function (
+                data) {
+                var violations = [];
+                data.reverse();
+                $.each(data, function (key, val) {
+                    violations.push("<li>" + val.temp + "</li>");
+                });
+
+                $('#violations-list').empty().append(violations);
+            })
+        }
+
+        function doPoll() {
+            getViolations();
+            getTemps();
+        }
+
+        $(document).ready(function () {
+            window.setInterval(doPoll, 1000);
+        });
+    </script>
+    <style>
+        .column {
+            float: left;
+            width: 33.33%;
+        }
+
+        /* Clear floats after the columns */
+
+        .row:after {
+            content: "";
+            display: table;
+            clear: both;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="page-header">
+        <h1>Temperature Console</h1>
+    </div>
+    <button onclick="window.location='./profile.html';">Edit / View Profile</button>
+    <div class="row">
+        <div class="column">
+            <h3>Current Temp</h3>
+            <div id="current-temp">
+
+            </div>
+        </div>
+
+        <div class="column">
+            <h3>Recent Temps</h3>
+            <ul id="recents-list">
+
+            </ul>
+        </div>
+
+        <div class="column">
+            <h3>Temp Violations</h3>
+            <ul id="violations-list"></ul>
+        </div>
+    </div>
+</body>
+
+</html>
