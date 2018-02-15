@@ -1,10 +1,67 @@
 <!DOCTYPE html>
 <html>
-    <head>
-        <title>Profile</title>
-    </head>
-    <body>
+
+<head>
+    <title>Profile</title>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+    <script>
+        function getProfile() {
+            $.getJSON("http://localhost:8080/sky/cloud/7AvAkjEQ5jYhDbS8wcXUyh/sensor_profile/get_profile", function (
+                data) {
+                $('input[name="name"]').val(data.name);
+                $('input[name="location"]').val(data.location);
+                $('input[name="high"]').val(data.high);
+                $('input[name="number"]').val(data.number);
+            })
+        }
+
+        function saveProfile() {
+            var params = $("#form :input").serializeArray();
+            console.log(params)
+
+            $.post("http://localhost:8080/sky/event/7AvAkjEQ5jYhDbS8wcXUyh/0/sensor/profile_updated", params, function (
+            data) {
+                console.log(data)
+            })
+        }
+
+        $(document).ready(function () {
+            getProfile()
+
+            $('#form').submit(function(e) {
+                e.preventDefault();
+                saveProfile()
+            });
+        });
+
+        
+    </script>
+    <style>
+        
+    </style>
+</head>
+
+<body>
+    <div class="page-header">
         <h1>Profile</h1>
-        <button onclick="window.location='./index.html';">Back to Dashboard</button>
-    </body>
+    </div>
+    <button onclick="window.location='./index.html';">Back to Dashboard</button>
+    <br><br>
+    <form id="form">
+        Name:<br>
+        <input type="text" name="name">
+        <br>
+        Location:<br>
+        <input type="text" name="location">
+        <br>
+        High value:<br>
+        <input type="number" name="high">
+        <br>
+        Number to text:<br>
+        <input type="text" name="number">
+        <br><br>
+        <input type="submit" value="Update sensor profile">
+      </form> 
+</body>
+
 </html>

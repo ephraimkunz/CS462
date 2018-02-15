@@ -12,9 +12,9 @@
                 data.reverse();
                 $.each(data, function (key, val) {
                     if (key === 0) {
-                        $('#current-temp').text(val.temp);
+                        $('#current-temp').text(val.temp + ' °F');
                     } else {
-                        recents.push("<li>" + val.temp + "</li>");
+                        recents.push("<li>" + val.temp + ' °F · ' + val.time + "</li>");
                     }
                 });
 
@@ -23,16 +23,17 @@
         }
 
         function getViolations() {
-            $.getJSON("http://localhost:8080/sky/cloud/7AvAkjEQ5jYhDbS8wcXUyh/temperature_store/threshold_violations", function (
-                data) {
-                var violations = [];
-                data.reverse();
-                $.each(data, function (key, val) {
-                    violations.push("<li>" + val.temp + "</li>");
-                });
+            $.getJSON("http://localhost:8080/sky/cloud/7AvAkjEQ5jYhDbS8wcXUyh/temperature_store/threshold_violations",
+                function (
+                    data) {
+                    var violations = [];
+                    data.reverse();
+                    $.each(data, function (key, val) {
+                        violations.push("<li>" + val.temp + ' °F · ' + val.time + "</li>");
+                    });
 
-                $('#violations-list').empty().append(violations);
-            })
+                    $('#violations-list').empty().append(violations);
+                })
         }
 
         function doPoll() {
@@ -47,7 +48,14 @@
     <style>
         .column {
             float: left;
-            width: 33.33%;
+        }
+
+        .left {
+            width: 20%;
+        }
+
+        .middle, .right {
+            width: 40%;
         }
 
         /* Clear floats after the columns */
@@ -66,21 +74,21 @@
     </div>
     <button onclick="window.location='./profile.html';">Edit / View Profile</button>
     <div class="row">
-        <div class="column">
+        <div class="column left">
             <h3>Current Temp</h3>
             <div id="current-temp">
 
             </div>
         </div>
 
-        <div class="column">
+        <div class="column middle">
             <h3>Recent Temps</h3>
             <ul id="recents-list">
 
             </ul>
         </div>
 
-        <div class="column">
+        <div class="column right">
             <h3>Temp Violations</h3>
             <ul id="violations-list"></ul>
         </div>
