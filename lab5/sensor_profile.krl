@@ -35,7 +35,7 @@ ruleset sensor_profile {
             sensor_name = event:attr("name").defaultsTo(ent:name)
             sensor_location = event:attr("location").defaultsTo(ent:location)
             sensor_high = event:attr("high").defaultsTo(ent:high)
-            sensor_phone_number = event:attr("number").defaultsTo(ent:phone_number)
+            sensor_phone_number = event:attr("number").defaultsTo(ent:number)
         }
         
         always {

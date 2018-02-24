@@ -16,7 +16,7 @@ ruleset temperature_store {
             }
 
         temperatures = function() {
-            ent:all_temps
+            ent:all_temps.defaultsTo([])
         }
 
         threshold_violations = function() {
