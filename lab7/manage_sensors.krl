@@ -25,7 +25,7 @@ ruleset manage_sensors {
         __testing = { "queries": [ { "name": "__testing" }, {"name": "sensors"}, {"name": "getAllTemps"} ],
                         "events": [ { "domain": "sensor", "type": "new_sensor",
                                     "attrs": [ "name" ] },
-                                    {"domain": "sensor", "type": "introduce", "attrs": ["name", "eci"]},
+                                    {"domain": "sensor", "type": "introduce", "attrs": ["name", "eci", "host"]},
                                     {"domain": "collection", "type": "empty",
                                     "attrs": []},
                                     {"domain": "sensor", "type": "unneeded_sensor", 
@@ -107,6 +107,7 @@ ruleset manage_sensors {
         pre {
             eci = event:attr("eci")
             sensor_name = event:attr("name")
+            host = event:attr("host")
         }
 
         always {
@@ -114,6 +115,7 @@ ruleset manage_sensors {
                 {
                     "name": sensor_name,
                     "Rx_role": "temp_sensor",
+                    "Tx_host": host,
                     "Tx_role": "temp_sensor_controller",
                     "channel_type": "subscription",
                     "wellKnown_Tx": eci
