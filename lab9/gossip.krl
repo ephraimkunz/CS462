@@ -6,8 +6,7 @@ ruleset gossip_ruleset {
 
     global {
         __testing = { "queries": [ { "name": "__testing" }, {"name": "list_scheduled"}, {"name": "listTemps"}],
-                        "events": [ { "domain": "gossip", "type": "set_period","attrs": [ "period" ] },
-                        { "domain": "gossip", "type": "new_message","attrs": [  ] }  ] }
+                        "events": [ { "domain": "gossip", "type": "set_period","attrs": [ "period" ] } ] }
                         
         list_scheduled = function() {
             schedule:list()
@@ -24,11 +23,17 @@ ruleset gossip_ruleset {
         }
 
         getPeer = function() {
-            // TODO: Be smart about choosing peer.
-            // For now, just choose a peer at random
-            subs = Subscriptions:established("Rx_role","node");
-            rand = random:integer(subs.length() - 1);
-            subs[rand]
+            // Choose a peer randomly from the subset that need something.
+            subs = Subscriptions:established("Rx_role","node").klog("Subs:");
+            
+            peers = ent:peerState;
+            filtered = peers.filter(function(v,k){
+                getMissingMessages(v).length() > 0;
+            }).klog("Filtered:");
+
+            rand = random:integer(filtered.length() - 1).klog("Rand:");
+            item = filtered.keys()[rand].klog("item:");
+            subs.filter(function(a){a{"Tx"} == item})[0].klog("Final:")
         }
 
         // Highest consecutive sequence number for picoId received
@@ -54,6 +59,15 @@ ruleset gossip_ruleset {
             <<#{meta:picoId}:#{sequenceNumber}>>
         }
 
+        createNewMessage = function(temp, time) {
+            {
+                "MessageID": getUniqueId(),
+                "SensorID": meta:picoId,
+                "Temperature": temp,
+                "Timestamp": time
+            }
+        }
+
         getSeenMessage = function() {
             {
                 "message": ent:seen,
@@ -74,25 +88,30 @@ ruleset gossip_ruleset {
         getMissingMessages = function(seen) {
             ent:seenMessages.filter(function(a) {
                 id = getPicoId(a{"MessageID"});
-                keep = id.isnull() || (seen{id}.klog("Seen id:") < getSequenceNum(a{"MessageID"}).klog("Sequence num:")) => true | false;
+                keep = seen{id}.isnull() || (seen{id} < getSequenceNum(a{"MessageID"})) => true | false;
                 keep
-            })
+            }).sort(function(a, b) {
+                a_seq = getSequenceNum(a{"MessageID"});
+                b_seq = getSequenceNum(b{"MessageID"});
+                a_seq < b_seq  => -1 |
+                a_seq == b_seq =>  0 |
+                1
+            });
         }
 
-        getRumorMessage = function() {
-            // TODO: Use intelligence to decide which message to send.
-            rand = random:integer(ent:seenMessages.length() - 1);
+        getRumorMessage = function(subscriber) {
+            missing = getMissingMessages(ent:peerState{subscriber{"Tx"}}).klog("Missing messages:");
             msg = {
-                "message": ent:seenMessages.length() == 0 => null | ent:seenMessages[rand],
+                "message": missing.length() == 0 => null | missing[0],
                 "type": "rumor"
             };
             msg
         }
 
-        prepareMessage = function() {
+        prepareMessage = function(subscriber) {
             // Choose message type
             rand = random:integer(1);
-            message = (rand == 0) => getSeenMessage() | getRumorMessage();
+            message = (rand == 0) => getSeenMessage() | getRumorMessage(subscriber);
             message
         }
     }
@@ -101,9 +120,8 @@ ruleset gossip_ruleset {
         select when wrangler ruleset_added where rids >< meta:rid
 
         always {
-            ent:period := 5;
+            ent:period := 20;
             ent:sequence := 0;
-            ent:counter := -1;
             ent:seen := {};
             ent:peerState := {};
             ent:seenMessages := [];
@@ -136,11 +154,11 @@ ruleset gossip_ruleset {
     rule gossip_heartbeat_process {
         select when gossip heartbeat
         pre {
-            subscriber = getPeer()
-            m = prepareMessage()
+            subscriber = getPeer().klog("Chosen to send to:")
+            m = prepareMessage(subscriber)
         }
 
-        if (not subscriber.isnull()) && (not m{"message"}.klog("Message:").isnull()) then 
+        if (not subscriber.isnull()) && (not m{"message"}.isnull()) then 
             noop()
         fired {
             raise gossip event "send_rumor" 
@@ -173,6 +191,8 @@ ruleset gossip_ruleset {
         pre {
             sub = event:attr("subscriber")
             mess = event:attr("message")
+            mess_picoId = getPicoId(mess{"MessageID"})
+            mess_seqNum = getSequenceNum(mess{"MessageID"})
         }
 
         event:send(
@@ -183,8 +203,9 @@ ruleset gossip_ruleset {
         )
 
         always {
-            // TODO: Increment sequence number if necessary
-
+            // Update our view of our peers
+            ent:peerState := ent:peerState.put([sub{"Tx"}, mess_picoId], mess_seqNum)
+            if (ent:peerState{sub{"Tx"}}{mess_picoId} + 1 == mess_seqNum) || (ent:peerState{sub{"Tx"}}{mess_picoId}.isnull() && mess_seqNum == 0);
         }
     }
 
@@ -232,12 +253,13 @@ ruleset gossip_ruleset {
     rule gossip_seen_save {
         select when gossip seen
         pre {
-            senderId = event:attr("sender"){"picoId"}
+            senderChan = event:attr("sender"){"Rx"}
             message = event:attr("message")
         }
 
         always {
-            ent:peerState := ent:peerState.put(senderId, message)
+            // Store peers by channel so we can reconcile with subscription list.
+            ent:peerState := ent:peerState.put(senderChan, message)
         }
     }
 
@@ -261,19 +283,42 @@ ruleset gossip_ruleset {
         select when gossip process
     }
 
-    rule gossip_new_message {
-        select when gossip new_message 
-        always {
-            ent:counter := ent:counter + 1;
-            ent:seenMessages := ent:seenMessages.defaultsTo([]).append({"MessageID":<<#{meta:picoId}:#{ent:counter}>>,"SensorID":"BCDA-9876-BCDA-9876-BCDA-9876","Temperature":"78","Timestamp":"the time stamp"})
+    rule auto_accept {
+        select when wrangler inbound_pending_subscription_added
+        pre {
+            Tx = event:attr("Tx").klog("Tx: ")
+        }
+        if not Tx.isnull() then noop()
+        fired {
+            raise wrangler event "pending_subscription_approval"
+            attributes event:attrs;
+
+            ent:peerState := ent:peerState.put(Tx, {})
         }
     }
 
-    rule auto_accept {
-        select when wrangler inbound_pending_subscription_added
+    rule sub_added {
+        select when wrangler subscription_added
+        pre {
+            Tx = event:attr("_Tx").klog("_Tx: ")
+        }
+        if not Tx.isnull() then noop()
         fired {
-            raise wrangler event "pending_subscription_approval"
-            attributes event:attrs
+            ent:peerState := ent:peerState.put(Tx, {})
+        }
+    }
+
+    rule new_temp_from_sensor {
+        select when wovyn new_temperature_reading
+        pre {
+            temp = event:attr("temperature")
+            time = event:attr("timestamp")
+            msg = createNewMessage(temp, time)
+        }
+        always {
+            ent:seenMessages := ent:seenMessages.append(msg);
+            ent:seen := ent:seen.put(meta:picoId, slideWindow(meta:picoId));
+            ent:sequence := ent:sequence + 1;
         }
     }
 }
