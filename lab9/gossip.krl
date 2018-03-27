@@ -1,41 +1,69 @@
 ruleset gossip_ruleset {
     meta {
         use module io.picolabs.subscription alias Subscriptions
-        shares __testing, list_schedule, set_period
+        shares __testing, set_period, list_scheduled, getMissingMessages, listTemps
     }
 
     global {
-        __testing = { "queries": [ { "name": "__testing" }, {"name": "list_schedule"}],
-                        "events": [ { "domain": "gossip", "type": "set_period","attrs": [ "period" ] } ] }
-
-        list_schedule = function() {
+        __testing = { "queries": [ { "name": "__testing" }, {"name": "list_scheduled"}, {"name": "listTemps"}],
+                        "events": [ { "domain": "gossip", "type": "set_period","attrs": [ "period" ] },
+                        { "domain": "gossip", "type": "new_message","attrs": [  ] }  ] }
+                        
+        list_scheduled = function() {
             schedule:list()
         }
 
+        listTemps = function() {
+            ent:seenMessages.filter(function(a) {
+                uniqueId = a{"MessageID"};
+                sn = getSequenceNum(uniqueId);
+                pn = getPicoId(uniqueId);
+
+                ent:seen{pn} == sn
+            });
+        }
+
         getPeer = function() {
+            // TODO: Be smart about choosing peer.
             // For now, just choose a peer at random
             subs = Subscriptions:established("Rx_role","node");
-            rand = random:integer(subs.length() - 1).klog("Random peer");
+            rand = random:integer(subs.length() - 1);
             subs[rand]
         }
 
+        // Highest consecutive sequence number for picoId received
+        slideWindow = function(picoId) {
+            filtered = ent:seenMessages.filter(function(a) {
+                id = getPicoId(a{"MessageID"});
+                id == picoId
+            }).map(function(a){getSequenceNum(a{"MessageID"})});
+
+            sorted = filtered.sort(function(a_seq, b_seq){
+                a_seq < b_seq  => -1 |
+                a_seq == b_seq =>  0 |
+                1
+            });
+        
+            sorted.reduce(function(a_seq, b_seq) {
+                b_seq == a_seq + 1 => b_seq | a_seq
+            }, -1);
+        }
+
         getUniqueId = function() {
-            sequenceNumber = ent:sequence.defaultsTo(0);
+            sequenceNumber = ent:sequence;
             <<#{meta:picoId}:#{sequenceNumber}>>
         }
 
         getSeenMessage = function() {
-            {"ABCD-1234-ABCD-1234-ABCD-125A": 3,
-            "ABCD-1234-ABCD-1234-ABCD-129B": 1,
-            "ABCD-1234-ABCD-1234-ABCD-123C": 10,
-            "type": "seen",
-            "id": getUniqueId()
+            {
+                "message": ent:seen,
+                "type": "seen"
             }
         }
 
         getSequenceNum = function(id) {
             splitted = id.split(re#:#);
-            splitted[splitted.length() - 1]
+            splitted[splitted.length() - 1].as("Number")
         }
 
         getPicoId = function(id) {
@@ -43,14 +71,22 @@ ruleset gossip_ruleset {
             splitted[0]
         }
 
+        getMissingMessages = function(seen) {
+            ent:seenMessages.filter(function(a) {
+                id = getPicoId(a{"MessageID"});
+                keep = id.isnull() || (seen{id}.klog("Seen id:") < getSequenceNum(a{"MessageID"}).klog("Sequence num:")) => true | false;
+                keep
+            })
+        }
+
         getRumorMessage = function() {
-            {"MessageID": "ABCD-1234-ABCD-1234-ABCD-1234:1",
-            "SensorID": "BCDA-9876-BCDA-9876-BCDA-9876",
-            "Temperature": "78",
-            "Timestamp": "the time stamp",
-            "type": "rumor",
-            "id": getUniqueId()
-            }
+            // TODO: Use intelligence to decide which message to send.
+            rand = random:integer(ent:seenMessages.length() - 1);
+            msg = {
+                "message": ent:seenMessages.length() == 0 => null | ent:seenMessages[rand],
+                "type": "rumor"
+            };
+            msg
         }
 
         prepareMessage = function() {
@@ -62,10 +98,15 @@ ruleset gossip_ruleset {
     }
 
     rule ruleset_added {
-        select when wrangler ruleset_added
+        select when wrangler ruleset_added where rids >< meta:rid
 
         always {
-            ent:period := 10;
+            ent:period := 5;
+            ent:sequence := 0;
+            ent:counter := -1;
+            ent:seen := {};
+            ent:peerState := {};
+            ent:seenMessages := [];
             raise gossip event "heartbeat" attributes {"period": ent:period}
         }
     }
@@ -73,12 +114,11 @@ ruleset gossip_ruleset {
     rule gossip_heartbeat_reschedule {
         select when gossip heartbeat
         pre {
-            period = event:attr("period")
+            period = ent:period
         }
 
          always {
-            schedule gossip event "heartbeat" at time:add(time:now(), {"seconds": period}) 
-                attributes {"period": ent:period}
+            schedule gossip event "heartbeat" at time:add(time:now(), {"seconds": period})
          }
     }
 
@@ -100,14 +140,51 @@ ruleset gossip_ruleset {
             m = prepareMessage()
         }
 
-        if not subscriber.isnull() then 
-            event:send(
-                { "eci": subscriber{"Tx"}, "eid": "message",
-                    "domain": "gossip", "type": m{"type"},
-                    "attrs": {"message": m} }
-           )
+        if (not subscriber.isnull()) && (not m{"message"}.klog("Message:").isnull()) then 
+            noop()
         fired {
-            ent:sequence := ent:sequence.defaultsTo(0) + 1;
+            raise gossip event "send_rumor" 
+                attributes {"subscriber": subscriber, "message": m{"message"}}
+            if (m{"type"} == "rumor");
+
+            raise gossip event "send_seen"
+                attributes {"subscriber": subscriber, "message": m{"message"}} 
+            if (m{"type"} == "seen");
+        }
+    }
+
+    rule gossip_send_seen {
+        select when gossip send_seen
+        pre {
+            sub = event:attr("subscriber")
+            mess = event:attr("message")
+        }
+
+        event:send(
+            { "eci": sub{"Tx"}, "eid": "gossip_message",
+                "domain": "gossip", "type": "seen",
+                "attrs": {"message": mess, "sender": {"picoId": meta:picoId, "Rx": sub{"Rx"}}}
+            }
+        )
+    }
+
+    rule gossip_send_rumor {
+        select when gossip send_rumor
+        pre {
+            sub = event:attr("subscriber")
+            mess = event:attr("message")
+        }
+
+        event:send(
+            { "eci": sub{"Tx"}, "eid": "gossip_message",
+                "domain": "gossip", "type": "rumor",
+                "attrs": mess
+            }
+        )
+
+        always {
+            // TODO: Increment sequence number if necessary
+
         }
     }
 
@@ -115,9 +192,10 @@ ruleset gossip_ruleset {
     rule gossip_rumor {
         select when gossip rumor
         pre {
-            message = event:attr("message").klog("Gossip rumor: ")
-            seq_num = getSequenceNum(message{"MessageID"})
-            pico_id = getPicoId(message{"MessageID"})
+            id = event:attr("MessageID")
+            seq_num = getSequenceNum(id)
+            pico_id = getPicoId(id)
+            seen = ent:seen{pico_id}
             first_seen = ent:seen{pico_id}.isnull()
         }
 
@@ -125,9 +203,15 @@ ruleset gossip_ruleset {
             noop()
         
         fired {
-            ent:seen := ent:seen.defaultsTo({}).put(pico_id, 0)
+            ent:seen := ent:seen.put(pico_id, -1)
         } finally {
-            ent:seenMessages := ent:seenMessages.defaultsTo([]).append(message);
+            ent:seenMessages := ent:seenMessages.append({
+                "MessageID": id,
+                "SensorID": event:attr("SensorID"),
+                "Temperature": event:attr("Temperature"),
+                "Timestamp": event:attr("Timestamp")}) 
+            if ent:seenMessages.filter(function(a) {a{"MessageID"} == id}).length() == 0;
+
             raise gossip event "update_sequential_seen"
                 attributes {"picoId": pico_id, "seqNum": seq_num}
         }
@@ -136,27 +220,53 @@ ruleset gossip_ruleset {
     rule update_sequential_seen {
         select when gossip update_sequential_seen
         pre {
-            pico_id = event:attr("picoId").klog("Pico_id: ")
-            seq_num = event:attr("seqNum").as("Number").klog("Sequence number: ")
+            pico_id = event:attr("picoId")
+            seq_num = event:attr("seqNum").as("Number")
         }
 
-        if ent:seen{pico_id} + 1 == seq_num then
-            noop()
-
-        fired {
-            ent:seen := ent:seen.put(pico_id, seq_num)
+        always {
+            ent:seen := ent:seen.put(pico_id, slideWindow(pico_id))
         }
     }
 
-    rule gossip_seen {
+    rule gossip_seen_save {
         select when gossip seen
-        //pre {
-        //    message = event:attr("message").klog("Gossip seen: ")
-        //}
+        pre {
+            senderId = event:attr("sender"){"picoId"}
+            message = event:attr("message")
+        }
+
+        always {
+            ent:peerState := ent:peerState.put(senderId, message)
+        }
+    }
+
+    rule gossip_seen_return_missing {
+        select when gossip seen
+        foreach getMissingMessages(event:attr("message")).klog("Missing:") setting(mess)
+        pre {
+            senderId = event:attr("sender"){"picoId"}
+            rx = event:attr("sender"){"Rx"}
+        }
+
+        event:send(
+            { "eci": rx, "eid": "gossip_message_response",
+                "domain": "gossip", "type": "rumor",
+                "attrs": mess
+            }
+        )
     }
 
     rule gossip_process {
         select when gossip process
+    }
+
+    rule gossip_new_message {
+        select when gossip new_message 
+        always {
+            ent:counter := ent:counter + 1;
+            ent:seenMessages := ent:seenMessages.defaultsTo([]).append({"MessageID":<<#{meta:picoId}:#{ent:counter}>>,"SensorID":"BCDA-9876-BCDA-9876-BCDA-9876","Temperature":"78","Timestamp":"the time stamp"})
+        }
     }
 
     rule auto_accept {
