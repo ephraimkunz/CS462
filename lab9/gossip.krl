@@ -1,15 +1,20 @@
 ruleset gossip_ruleset {
     meta {
         use module io.picolabs.subscription alias Subscriptions
-        shares __testing, set_period, list_scheduled, getMissingMessages, listTemps
+        shares __testing, set_period, list_scheduled, getMissingMessages, listTemps, getProcess
     }
 
     global {
-        __testing = { "queries": [ { "name": "__testing" }, {"name": "list_scheduled"}, {"name": "listTemps"}],
-                        "events": [ { "domain": "gossip", "type": "set_period","attrs": [ "period" ] } ] }
+        __testing = { "queries": [ { "name": "__testing" }, {"name": "list_scheduled"}, {"name": "listTemps"}, {"name": "getProcess"}],
+                        "events": [ { "domain": "gossip", "type": "set_period","attrs": [ "period" ] },
+                        { "domain": "gossip", "type": "process","attrs": [ "status" ] } ] }
                         
         list_scheduled = function() {
             schedule:list()
+        }
+
+        getProcess = function() {
+            ent:process
         }
 
         listTemps = function() {
@@ -25,6 +30,7 @@ ruleset gossip_ruleset {
         getPeer = function() {
             // Choose a peer randomly from the subset that need something.
             subs = Subscriptions:established("Rx_role","node").klog("Subs:");
+            rand_sub = random:integer(subs.length() - 1); // Only used if filtered is empty
             
             peers = ent:peerState;
             filtered = peers.filter(function(v,k){
@@ -33,7 +39,7 @@ ruleset gossip_ruleset {
 
             rand = random:integer(filtered.length() - 1).klog("Rand:");
             item = filtered.keys()[rand].klog("item:");
-            subs.filter(function(a){a{"Tx"} == item})[0].klog("Final:")
+            subs.filter(function(a){a{"Tx"} == item})[0].klog("Final:").isnull() => subs[rand_sub] | subs.filter(function(a){a{"Tx"} == item})[0]
         }
 
         // Highest consecutive sequence number for picoId received
@@ -120,11 +126,12 @@ ruleset gossip_ruleset {
         select when wrangler ruleset_added where rids >< meta:rid
 
         always {
-            ent:period := 20;
+            ent:period := 3;
             ent:sequence := 0;
             ent:seen := {};
             ent:peerState := {};
             ent:seenMessages := [];
+            ent:process := "on";
             raise gossip event "heartbeat" attributes {"period": ent:period}
         }
     }
@@ -152,7 +159,7 @@ ruleset gossip_ruleset {
     }
 
     rule gossip_heartbeat_process {
-        select when gossip heartbeat
+        select when gossip heartbeat where ent:process == "on"
         pre {
             subscriber = getPeer().klog("Chosen to send to:")
             m = prepareMessage(subscriber)
@@ -211,7 +218,7 @@ ruleset gossip_ruleset {
 
     // Store rumor and create highest sequential seen entry if necessary.
     rule gossip_rumor {
-        select when gossip rumor
+        select when gossip rumor where ent:process == "on"
         pre {
             id = event:attr("MessageID")
             seq_num = getSequenceNum(id)
@@ -251,7 +258,7 @@ ruleset gossip_ruleset {
     }
 
     rule gossip_seen_save {
-        select when gossip seen
+        select when gossip seen where ent:process == "on"
         pre {
             senderChan = event:attr("sender"){"Rx"}
             message = event:attr("message")
@@ -264,7 +271,7 @@ ruleset gossip_ruleset {
     }
 
     rule gossip_seen_return_missing {
-        select when gossip seen
+        select when gossip seen where ent:process == "on"
         foreach getMissingMessages(event:attr("message")).klog("Missing:") setting(mess)
         pre {
             senderId = event:attr("sender"){"picoId"}
@@ -281,6 +288,13 @@ ruleset gossip_ruleset {
 
     rule gossip_process {
         select when gossip process
+        pre {
+            status = event:attr("status")
+        }
+
+        always {
+            ent:process := status;
+        }
     }
 
     rule auto_accept {
