@@ -72,6 +72,7 @@ ruleset store_ruleset {
         always {
             ent:bids := [];
             ent:orders := {};
+            ent:bidWindowTime := 10;
         }
     }
 
@@ -115,7 +116,7 @@ ruleset store_ruleset {
 
         fired {
             // Schedule an event in the future to choose a driver
-            schedule order event "chooseBid" at time:add(time:now(), {"seconds": 10})
+            schedule order event "chooseBid" at time:add(time:now(), {"seconds": ent:bidWindowTime})
                 attributes {"id": id}
         }
     }
@@ -158,8 +159,8 @@ ruleset store_ruleset {
 
         else {
             // No bids yet, so reschedule
-            schedule order event "chooseBid" at time:add(time:now(), {"seconds": 10})
-                attributes {"id": id}
+            schedule order event "chooseBid" at time:add(time:now(), {"seconds": ent:bidWindowTime})
+                attributes event:attrs()
         }
     }
 

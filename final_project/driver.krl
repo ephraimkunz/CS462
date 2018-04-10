@@ -1,19 +1,25 @@
 ruleset driver_ruleset {
     meta {
         use module io.picolabs.subscription alias Subscriptions
-        shares __testing, getQueue, getPendingOrder, getCompletedOrders
+        shares __testing, getQueue, getPendingOrder, getCompletedOrders, getRating
     }
     
     global {
-        __testing = {"events": [],
+        __testing = {"events": [
+            {"domain": "driver", "type": "changeRating", "attrs": ["rating"]}
+        ],
 
             "queries": [
-                {"name": "getQueue"}, {"name": "getPendingOrder"}, {"name": "getCompletedOrders"}
+                {"name": "getQueue"}, {"name": "getPendingOrder"}, {"name": "getCompletedOrders"}, {"name": "getRating"}
             ]
         }
 
         getQueue = function() {
             ent:queuedForBid
+        }
+
+        getRating = function() {
+            ent:rating
         }
 
         getPendingOrder = function() {
@@ -28,6 +34,7 @@ ruleset driver_ruleset {
             ent:queuedForBid.length() == 0 => null | ent:queuedForBid[0];
         }
 
+        // Override point for additional conditions on whether we will choose to bid.
         shouldBidOnOrder = function(order) {
             true
         }
@@ -74,7 +81,7 @@ ruleset driver_ruleset {
         pre {
             // Take first item off of queue. Send a bid if I want. Advance queue in any case.
             next = getNextFromQueuedForBid().klog("Next:")
-            next_valid = not next.isnull().klog("Next valid:")
+            next_valid = not next.isnull()
         }
 
         if next_valid && shouldBidOnOrder(next) then 
@@ -135,6 +142,17 @@ ruleset driver_ruleset {
         always {
             raise wrangler event "pending_subscription_approval"
             attributes attributes
+        }
+    }
+
+    rule change_rating {
+        select when driver changeRating
+        pre {
+            newRating = event:attr("rating").defaultsTo(ent:rating)
+        }
+
+        always {
+            ent:rating := newRating;
         }
     }
 }
