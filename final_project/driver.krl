@@ -1,17 +1,22 @@
 ruleset driver_ruleset {
     meta {
         use module io.picolabs.subscription alias Subscriptions
-        shares __testing, getQueue, getPendingOrder, getCompletedOrders, getRating
+        shares __testing, getQueue, getPendingOrder, getCompletedOrders, getRating, getLocation
     }
     
     global {
         __testing = {"events": [
-            {"domain": "driver", "type": "changeRating", "attrs": ["rating"]}
+            {"domain": "driver", "type": "changeRating", "attrs": ["rating"]},
+            {"domain": "driver", "type": "setLocation", "attrs": ["latitude", "longitude"]}
         ],
 
             "queries": [
-                {"name": "getQueue"}, {"name": "getPendingOrder"}, {"name": "getCompletedOrders"}, {"name": "getRating"}
+                {"name": "getQueue"}, {"name": "getPendingOrder"}, {"name": "getCompletedOrders"}, {"name": "getRating"}, {"name": "getLocation"}
             ]
+        }
+
+        getLocation = function() {
+            ent:location
         }
 
         getQueue = function() {
@@ -39,9 +44,20 @@ ruleset driver_ruleset {
             ent:queuedForBid.length() == 0 => null | ent:queuedForBid[0];
         }
 
+        getDistance = function(alat, alon, blat, blon) {
+            // TODO: Use distance API here
+            5
+        }
+
         // Override point for additional conditions on whether we will choose to bid.
         shouldBidOnOrder = function(order) {
-            true
+            // Only bid if store is close enough
+            driverLat = ent:location{"latitude"};
+            driverLon = ent:location{"longitude"};
+            storeLat = order{["storeLocation", "latitude"]};
+            storeLon = order{["storeLocation", "longitude"]};
+
+            getDistance(driverLat, driverLon, storeLat, storeLon) < ent:maxDistanceForBidding
         }
     }
 
@@ -53,7 +69,9 @@ ruleset driver_ruleset {
             ent:completedDelivery := [];
             ent:queuedForBid := [];
             ent:rating := random:integer(5);
+            ent:location := {"latitude": "40.24893579577157", "longitude": "-111.64955822289846"};
             ent:forwardedOrderIds := []; // All order id's I've seen / forwarded. Each driver forwards each id exactly once.
+            ent:maxDistanceForBidding := 10000;
         }
     }
 
@@ -63,13 +81,15 @@ ruleset driver_ruleset {
         pre {
             storeEci = event:attr("storeEci")
             order = event:attr("order")
+            storeLocation = event:attr("storeLocation")
 
             bid = {
                 "id": order{"id"},
-                "dist": 5,
+                "driverLocation": ent:location,
                 "rating": ent:rating,
                 "driverEci": meta:eci,
-                "storeEci": storeEci
+                "storeEci": storeEci,
+                "storeLocation": storeLocation
             }
         }
 
@@ -169,6 +189,18 @@ ruleset driver_ruleset {
 
         always {
             ent:rating := newRating;
+        }
+    }
+
+    rule set_location {
+        select when driver setLocation
+        pre {
+            lat = event:attr("latitude").defaultsTo(ent:location{"latitude"})
+            lon = event:attr("longitude").defaultsTo(ent:location{"longitude"})
+        }
+
+        always {
+            ent:location := {"latitude": lat, "longitude": lon}
         }
     }
 }

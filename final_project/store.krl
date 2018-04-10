@@ -6,18 +6,25 @@ ruleset store_ruleset {
             with account_sid = keys:twilio{"account_sid"}
             auth_token =  keys:twilio{"auth_token"}
 
-        shares __testing, get_all_orders, get_bids, get_assigned_orders, get_completed_orders
+        shares __testing, get_all_orders, get_bids, get_assigned_orders, get_completed_orders, getLocation
     }
 
     global {
         __testing = {"events": [
             {
                 "domain": "order", "type": "new", "attrs": ["phone", "description"]
+            },
+            {
+                "domain": "store", "type": "setLocation", "attrs": ["latitude", "longitude"]
             }],
 
             "queries": [
-                {"name": "get_all_orders"}, {"name": "get_bids"}, {"name": "get_assigned_orders"}, {"name": "get_completed_orders"}
+                {"name": "get_all_orders"}, {"name": "get_bids"}, {"name": "get_assigned_orders"}, {"name": "get_completed_orders"}, {"name": "getLocation"}
             ]
+        }
+
+        getLocation = function() {
+            ent:location
         }
 
         get_assigned_orders = function() {
@@ -52,13 +59,24 @@ ruleset store_ruleset {
             ent:bids
         }
 
+        getDistance = function(alat, alon, blat, blon) {
+            // TODO: Replace with call to API
+            5
+        }
+
         chooseBidForOrder = function(orderId) {
             filtered = ent:bids.filter(function(a){a{"id"} == orderId}).klog("Filtered:");
 
-            // TODO: Replace with distance API
-            sorted = filtered.sort(function(a, b) { a{"dist"} < b{"dist"}  => -1 |
-                            a{"dist"} == b{"dist"} =>  0 |
-                                       1
+            sorted = filtered.sort(function(a, b) {
+                alat = a{["driverLocation", "latitude"]};
+                alon = a{["driverLocation", "longitude"]};
+                blat = b{["driverLocation", "latitude"]};
+                blon = b{["driverLocation", "longitude"]};
+                storelat = ent:location{"latitude"};
+                storelon = ent:location{"longitude"};
+
+                a{"rating"} > b{"rating"}  => -1 |
+                a{"rating"} == b{"rating"} && (getDistance(alat, alon, storelat, storelon) < getDistance(blat, blon, storelat, storelon)) =>  -1 | 1
             }).klog("Sorted:");
             sorted[0];
         }
@@ -78,7 +96,8 @@ ruleset store_ruleset {
             ent:bids := [];
             ent:orders := {};
             ent:bidWindowTime := 10;
-            ent:storePhoneNumber := "+14352653308"
+            ent:storePhoneNumber := "+14352653308";
+            ent:location := {"latitude": "40.2968979", "longitude": "-111.69464749999997"};
         }
     }
 
@@ -118,7 +137,7 @@ ruleset store_ruleset {
             event:send(
             { "eci": driver{"Tx"}, "eid": "request_bids",
                 "domain": "order", "type": "needDriver",
-                "attrs": { "order": order, "storeEci": meta:eci} } )
+                "attrs": { "order": order, "storeEci": meta:eci, "storeLocation": ent:location} } )
 
         fired {
             // Schedule an event in the future to choose a driver
@@ -177,7 +196,7 @@ ruleset store_ruleset {
     }
 
     rule bid_reject {
-        select when order acceptForOrder
+        select when order rejectForOrder
         foreach getRejectedBids(event:attr("bid")) setting(rejected)
         
         event:send(
@@ -187,7 +206,7 @@ ruleset store_ruleset {
     }
 
     rule bid_accept {
-        select when order rejectForOrder
+        select when order acceptForOrder
         pre {
             accepted = event:attr("bid")
         }
@@ -205,8 +224,6 @@ ruleset store_ruleset {
             order = order_by_id(orderId)
             delivered_at = time:now()
         }
-
-        // TODO: Send a text to person who placed order
 
         always {
             ent:orders := ent:orders.put([orderId, "delivered_at"], delivered_at);
@@ -239,5 +256,17 @@ ruleset store_ruleset {
         twilio:send_sms(toNumber,
                             ent:storePhoneNumber,
                             message)
+    }
+
+    rule set_location {
+        select when store setLocation
+        pre {
+            lat = event:attr("latitude").defaultsTo(ent:location{"latitude"})
+            lon = event:attr("longitude").defaultsTo(ent:location{"longitude"})
+        }
+
+        always {
+            ent:location := {"latitude": lat, "longitude": lon}
+        }
     }
 }
