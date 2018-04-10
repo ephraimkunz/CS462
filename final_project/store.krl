@@ -1,7 +1,7 @@
 ruleset store_ruleset {
     meta {
         use module io.picolabs.subscription alias Subscriptions
-        shares __testing, get_orders, get_bids
+        shares __testing, get_all_orders, get_bids, get_assigned_orders, get_completed_orders
     }
 
     global {
@@ -11,8 +11,20 @@ ruleset store_ruleset {
             }],
 
             "queries": [
-                {"name": "get_orders"}, {"name": "get_bids"}
+                {"name": "get_all_orders"}, {"name": "get_bids"}, {"name": "get_assigned_orders"}, {"name": "get_completed_orders"}
             ]
+        }
+
+        get_assigned_orders = function() {
+            ent:orders.filter(function(a) {
+                not a{"assigned_driver"}.isnull() && a{"delivered_at"}.isnull();
+            });
+        }
+
+        get_completed_orders = function() {
+            ent:orders.filter(function(a) {
+                not a{"delivered_at"}.isnull()
+            });
         }
 
         get_driver = function() {
@@ -27,7 +39,7 @@ ruleset store_ruleset {
             ent:orders{id}
         }
 
-        get_orders = function() {
+        get_all_orders = function() {
             ent:orders
         }
 
@@ -44,6 +56,13 @@ ruleset store_ruleset {
                                        1
             }).klog("Sorted:");
             sorted[0];
+        }
+
+        getRejectedBids = function(acceptedBid) {
+            filtered = ent:bids.filter(function(a){
+                a{"id"} == acceptedBid{"id"} && a{"driverEci"} != acceptedBid{"driverEci"}
+            });
+            filtered
         }
     }
 
@@ -106,14 +125,14 @@ ruleset store_ruleset {
         select when order bidOnOrder
         pre {
             bid = event:attr("bid")
-            chan = bid{"driverEci"}
+            eci = bid{"driverEci"}
             id = bid{"id"}
             order_already_assigned = not order_by_id(id){"assigned_driver"}.isnull()
         }
 
         if order_already_assigned then 
             event:send(
-            { "eci": chan, "eid": "collect_bid",
+            { "eci": eci, "eid": "reject_bid",
                 "domain": "order", "type": "rejected",
                 "attrs": { "id": id} } )
 
@@ -132,8 +151,50 @@ ruleset store_ruleset {
         if not chosen_bid.isnull() then noop()
 
         fired {
-            // TODO: Notify all orders for this id of accepted or rejected.
+            raise order event "acceptForOrder" attributes {"bid": chosen_bid};
+            raise order event "rejectForOrder" attributes {"bid": chosen_bid};
             ent:orders := ent:orders.put([orderId, "assigned_driver"], chosen_bid{"driverEci"});
+        }
+
+        else {
+            // No bids yet, so reschedule
+            schedule order event "chooseBid" at time:add(time:now(), {"seconds": 10})
+                attributes {"id": id}
+        }
+    }
+
+    rule bid_reject {
+        select when order acceptForOrder
+        foreach getRejectedBids(event:attr("bid")) setting(rejected)
+        
+        event:send(
+            { "eci": rejected{"driverEci"}, "eid": "reject_bid",
+                "domain": "order", "type": "rejected",
+                "attrs": { "id": rejected{"id"}} } )
+    }
+
+    rule bid_accept {
+        select when order rejectForOrder
+        pre {
+            accepted = event:attr("bid")
+        }
+
+        event:send(
+            { "eci": accepted{"driverEci"}, "eid": "accept_bid",
+                "domain": "order", "type": "assigned",
+                "attrs": { "id": accepted{"id"}} } )
+    }
+
+    rule order_delivered {
+        select when order delivered 
+        pre {
+            orderId = event:attr("id")
+        }
+
+        // TODO: Send a text to person who placed order
+
+        always {
+            ent:orders := ent:orders.put([orderId, "delivered_at"], time:now());
         }
     }
 

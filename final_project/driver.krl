@@ -1,4 +1,50 @@
 ruleset driver_ruleset {
+    meta {
+        use module io.picolabs.subscription alias Subscriptions
+        shares __testing, getQueue, getPendingOrder, getCompletedOrders
+    }
+    
+    global {
+        __testing = {"events": [],
+
+            "queries": [
+                {"name": "getQueue"}, {"name": "getPendingOrder"}, {"name": "getCompletedOrders"}
+            ]
+        }
+
+        getQueue = function() {
+            ent:queuedForBid
+        }
+
+        getPendingOrder = function() {
+            ent:pendingBid
+        }
+
+        getCompletedOrders = function() {
+            ent:completedDelivery
+        }
+
+        getNextFromQueuedForBid = function() {
+            ent:queuedForBid.length() == 0 => null | ent:queuedForBid[0];
+        }
+
+        shouldBidOnOrder = function(order) {
+            true
+        }
+    }
+
+    rule ruleset_added {
+        select when wrangler ruleset_added where rids >< meta:rid
+
+        always {
+            ent:pendingBid := null;
+            ent:completedDelivery := [];
+            ent:queuedForBid := [];
+            ent:rating := 4.5;
+        }
+    }
+
+    // Enqueue new request
     rule order_need_driver {
         select when order needDriver
         pre {
@@ -7,21 +53,77 @@ ruleset driver_ruleset {
 
             // TODO: Determine if I want to submit a bid
             // TODO: Gossip order to neighbors
-            should_submit_bid = true
             bid = {
                 "id": order{"id"},
                 "dist": 5,
-                "driverEci": meta:eci
+                "rating": ent:rating,
+                "driverEci": meta:eci,
+                "storeEci": storeEci
             }
         }
 
-        if should_submit_bid then 
-            event:send(
-            { "eci": storeEci, "eid": "offer_bid",
-                "domain": "order", "type": "bidOnOrder",
-                "attrs": { "bid": bid }} )
+        always {
+            // Store as pending bid. Can only have one pending bid at a time (in case it is accepted).
+            ent:queuedForBid := ent:queuedForBid.append(bid);
+            raise order event "tryAnotherBid" if ent:pendingBid.isnull();
+        }
+    }
 
-        fired {
+    rule try_another_bid {
+        select when order tryAnotherBid
+        pre {
+            // Take first item off of queue. Send a bid if I want. Advance queue in any case.
+            next = getNextFromQueuedForBid().klog("Next:")
+            next_valid = not next.isnull().klog("Next valid:")
+        }
+
+        if next_valid && shouldBidOnOrder(next) then 
+            event:send(
+            { "eci": next{"storeEci"}, "eid": "offer_bid",
+                "domain": "order", "type": "bidOnOrder",
+                "attrs": { "bid": next }} )
+
+        always {
+            ent:queuedForBid := ent:queuedForBid.slice(1, ent:queuedForBid.length() - 1) if next_valid;
+
+            // Add to pendingBid
+            ent:pendingBid := next if next_valid && shouldBidOnOrder(next);
+        }
+    }
+
+    // Pending bid rejected, try another bid on the list
+    rule bid_rejected {
+        select when order rejected
+
+        always {
+            ent:pendingBid := null;
+            raise order event "tryAnotherBid";
+        }
+    }
+
+    // Pending bid accepted, now go and deliver
+    rule bid_accepted {
+        select when order assigned
+        always {
+            // TODO: Randomly choose time
+            schedule order event "justDelivered" at time:add(time:now(), {"seconds": 10})
+        }
+    }
+
+    // Notify the store when I've finished delivering the order
+    rule just_delivered_order {
+        select when order justDelivered
+        
+        event:send(
+            { "eci": ent:pendingBid{"storeEci"}, "eid": "delivered_order",
+                "domain": "order", "type": "delivered",
+                "attrs": { "id": ent:pendingBid{"id"} }} )
+
+        always {
+            // Delivered now, so no more pending
+            ent:completedDelivery := ent:completedDelivery.append(ent:pendingBid);
+            ent:pendingBid := null;
+            raise order event "tryAnotherBid";
         }
     }
 
