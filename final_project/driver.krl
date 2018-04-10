@@ -18,6 +18,11 @@ ruleset driver_ruleset {
             ent:queuedForBid
         }
 
+        getDriverPeers = function() {
+            subs = Subscriptions:established("Rx_role","driver").klog("Peers:");
+            subs
+        }
+
         getRating = function() {
             ent:rating
         }
@@ -47,19 +52,18 @@ ruleset driver_ruleset {
             ent:pendingBid := null;
             ent:completedDelivery := [];
             ent:queuedForBid := [];
-            ent:rating := 4.5;
+            ent:rating := random:integer(5);
+            ent:forwardedOrderIds := []; // All order id's I've seen / forwarded. Each driver forwards each id exactly once.
         }
     }
 
     // Enqueue new request
     rule order_need_driver {
-        select when order needDriver
+        select when order needDriver where (not (ent:forwardedOrderIds >< event:attr("order"){"id"})).klog("Not forwarded yet?:")
         pre {
             storeEci = event:attr("storeEci")
             order = event:attr("order")
 
-            // TODO: Determine if I want to submit a bid
-            // TODO: Gossip order to neighbors
             bid = {
                 "id": order{"id"},
                 "dist": 5,
@@ -73,7 +77,20 @@ ruleset driver_ruleset {
             // Store as pending bid. Can only have one pending bid at a time (in case it is accepted).
             ent:queuedForBid := ent:queuedForBid.append(bid);
             raise order event "tryAnotherBid" if ent:pendingBid.isnull();
+
+            // Gossip to neighbors
+            raise order event "forward" attributes event:attrs;
+            ent:forwardedOrderIds := ent:forwardedOrderIds.append(order{"id"})
         }
+    }
+
+    rule forward_order {
+        select when order forward
+        foreach getDriverPeers() setting(driver)
+        
+        event:send({ "eci": driver{"Tx"}, "eid": "request_bids_forwarded",
+                "domain": "order", "type": "needDriver",
+                "attrs": event:attrs})
     }
 
     rule try_another_bid {
@@ -112,7 +129,6 @@ ruleset driver_ruleset {
     rule bid_accepted {
         select when order assigned
         always {
-            // TODO: Randomly choose time
             schedule order event "justDelivered" at time:add(time:now(), {"seconds": random:integer(upper = 20, lower = 5)})
         }
     }

@@ -165,7 +165,7 @@ ruleset store_ruleset {
             raise customer event "sendMessage" attributes 
                 {
                     "phoneNumber": order{"customer_phone"},
-                    "message": "Order with description " + order{"description"} + " was accepted by a driver at " + time:now()
+                    "message": "Order with description " + order{"description"} + " was accepted by " + chosen_bid{"driverEci"} + " at " + time:now()
                 }
         }
 
@@ -213,7 +213,7 @@ ruleset store_ruleset {
             raise customer event "sendMessage" attributes 
                 {
                     "phoneNumber": order{"customer_phone"},
-                    "message": "Order with description " + order{"description"} + " was delivered at " + delivered_at
+                    "message": "Order with description " + order{"description"} + " was delivered by " + order{"assigned_driver"} + " at " + delivered_at
                 }
         }
     }
