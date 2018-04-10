@@ -1,6 +1,11 @@
 ruleset store_ruleset {
     meta {
         use module io.picolabs.subscription alias Subscriptions
+        use module com.ephraimkunz.api_keys
+        use module twilio_v2_api alias twilio
+            with account_sid = keys:twilio{"account_sid"}
+            auth_token =  keys:twilio{"auth_token"}
+
         shares __testing, get_all_orders, get_bids, get_assigned_orders, get_completed_orders
     }
 
@@ -73,6 +78,7 @@ ruleset store_ruleset {
             ent:bids := [];
             ent:orders := {};
             ent:bidWindowTime := 10;
+            ent:storePhoneNumber := "+14352653308"
         }
     }
 
@@ -146,6 +152,7 @@ ruleset store_ruleset {
         select when order chooseBid
         pre {
             orderId = event:attr("id")
+            order = order_by_id(orderId)
             chosen_bid = chooseBidForOrder(orderId).klog("Chosen bid:")
         }
 
@@ -155,12 +162,17 @@ ruleset store_ruleset {
             raise order event "acceptForOrder" attributes {"bid": chosen_bid};
             raise order event "rejectForOrder" attributes {"bid": chosen_bid};
             ent:orders := ent:orders.put([orderId, "assigned_driver"], chosen_bid{"driverEci"});
+            raise customer event "sendMessage" attributes 
+                {
+                    "phoneNumber": order{"customer_phone"},
+                    "message": "Order with description " + order{"description"} + " was accepted by a driver at " + time:now()
+                }
         }
 
         else {
             // No bids yet, so reschedule
             schedule order event "chooseBid" at time:add(time:now(), {"seconds": ent:bidWindowTime})
-                attributes event:attrs()
+                attributes event:attrs
         }
     }
 
@@ -190,12 +202,19 @@ ruleset store_ruleset {
         select when order delivered 
         pre {
             orderId = event:attr("id")
+            order = order_by_id(orderId)
+            delivered_at = time:now()
         }
 
         // TODO: Send a text to person who placed order
 
         always {
-            ent:orders := ent:orders.put([orderId, "delivered_at"], time:now());
+            ent:orders := ent:orders.put([orderId, "delivered_at"], delivered_at);
+            raise customer event "sendMessage" attributes 
+                {
+                    "phoneNumber": order{"customer_phone"},
+                    "message": "Order with description " + order{"description"} + " was delivered at " + delivered_at
+                }
         }
     }
 
@@ -208,5 +227,17 @@ ruleset store_ruleset {
             raise wrangler event "pending_subscription_approval"
             attributes attributes
         }
+    }
+
+    rule update_customer_via_text {
+        select when customer sendMessage
+        pre {
+            message = event:attr("message")
+            toNumber = event:attr("phoneNumber")
+        }
+
+        twilio:send_sms(toNumber,
+                            ent:storePhoneNumber,
+                            message)
     }
 }

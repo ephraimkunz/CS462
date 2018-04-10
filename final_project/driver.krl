@@ -113,7 +113,7 @@ ruleset driver_ruleset {
         select when order assigned
         always {
             // TODO: Randomly choose time
-            schedule order event "justDelivered" at time:add(time:now(), {"seconds": 10})
+            schedule order event "justDelivered" at time:add(time:now(), {"seconds": random:integer(upper = 20, lower = 5)})
         }
     }
 
