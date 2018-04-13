@@ -5,6 +5,8 @@ ruleset store_ruleset {
         use module twilio_v2_api alias twilio
             with account_sid = keys:twilio{"account_sid"}
             auth_token =  keys:twilio{"auth_token"}
+        use module distance alias dist
+            with auth_token = keys:distance{"auth_token"}
 
         shares __testing, get_all_orders, get_bids, get_assigned_orders, get_completed_orders, getLocation
     }
@@ -60,8 +62,8 @@ ruleset store_ruleset {
         }
 
         getDistance = function(alat, alon, blat, blon) {
-            // TODO: Replace with call to API
-            5
+            output = dist:get_distance(alat,alon,blat,blon).klog("Store dist calculated:");
+            output;
         }
 
         chooseBidForOrder = function(orderId) {

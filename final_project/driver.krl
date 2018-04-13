@@ -1,6 +1,8 @@
 ruleset driver_ruleset {
     meta {
         use module io.picolabs.subscription alias Subscriptions
+        use module com.ephraimkunz.api_keys
+        use module distance alias dist with auth_token = keys:distance{"auth_token"}
         shares __testing, getQueue, getPendingOrder, getCompletedOrders, getRating, getLocation
     }
     
@@ -45,8 +47,8 @@ ruleset driver_ruleset {
         }
 
         getDistance = function(alat, alon, blat, blon) {
-            // TODO: Use distance API here
-            5
+            output = dist:get_distance(alat,alon,blat,blon).klog("Driver dist calculated:");
+            output;
         }
 
         // Override point for additional conditions on whether we will choose to bid.
@@ -184,7 +186,7 @@ ruleset driver_ruleset {
     rule change_rating {
         select when driver changeRating
         pre {
-            newRating = event:attr("rating").defaultsTo(ent:rating)
+            newRating = event:attr("rating").as("Number").defaultsTo(ent:rating)
         }
 
         always {
