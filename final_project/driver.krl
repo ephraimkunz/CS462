@@ -151,7 +151,7 @@ ruleset driver_ruleset {
     rule bid_accepted {
         select when order assigned
         always {
-            schedule order event "justDelivered" at time:add(time:now(), {"seconds": random:integer(upper = 20, lower = 5)})
+            schedule order event "justDelivered" at time:add(time:now(), {"seconds": random:integer(upper = 60, lower = 30)})
         }
     }
 
